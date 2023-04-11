@@ -1,0 +1,6 @@
+openai
+requests
+moviepy
+SpeechRecognition
+nltk
+moviepy

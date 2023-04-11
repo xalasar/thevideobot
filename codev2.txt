@@ -1,0 +1,178 @@
+import openai
+import shutil
+import nltk
+from nltk import tokenize
+from nltk.corpus import stopwords
+from moviepy.editor import *
+from moviepy.video.io.VideoFileClip import VideoFileClip
+import requests
+import json
+import os
+import subprocess
+# Initialize GPT-3 API client
+openai.api_key = "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"
+
+# Function to generate script using GPT-3
+def generate_script(prompt):
+    try:
+        response = openai.Completion.create(
+            engine="text-davinci-002",
+            prompt=f"Create a list of 5 bullet points based on the following topic: {prompt}",
+            max_tokens=200,
+            n=1,
+            stop=None,
+            temperature=0.7,
+        )
+        script = response.choices[0].text.strip()
+        return script
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        return None
+
+
+# Function to extract main points from the script
+def extract_keywords(script):
+    nltk.download("punkt")
+    nltk.download("stopwords")
+    stop_words = set(stopwords.words("english"))
+    words = nltk.word_tokenize(script)
+    keywords = [word for word in words if word.lower(
+    ) not in stop_words and word.isalnum()]
+    return keywords
+
+# Function to search for stock videos using Pexels API
+def search_videos(keywords, max_clips):
+    api_key = "ehyGJkwi8gUUjseQb1Hf5KpcugxylcoAp9L2eyR3gTRjtzxSL2e6KzPl"
+    url = "https://api.pexels.com/videos/search"
+    videos = []
+    clips_found = 0
+
+    # Increase the number of results per page
+    results_per_page = max(10, len(keywords))
+
+    # Search for videos using individual keywords and combined keywords
+    for i in range(len(keywords) + 1):
+        if i < len(keywords):
+            search_query = keywords[i]
+        else:
+            search_query = ' '.join(keywords)
+        
+        response = requests.get(url, params={"query": search_query, "per_page": results_per_page}, headers={
+                                "Authorization": api_key})
+        data = json.loads(response.text)
+
+        if data.get("videos"):
+            for video in data["videos"]:
+                video_url = video["video_files"][0]["link"]
+                keyword = search_query if i == len(keywords) else keywords[i]
+                videos.append({"keyword": keyword, "url": video_url})
+                clips_found += 1
+                
+                if clips_found >= max_clips:
+                    return videos
+
+    return videos
+
+# Function to download video files
+def download_videos(videos, folder_path, max_clips=None, max_duration=None):
+    video_clips = []
+
+    for i, video in enumerate(videos):
+        if max_clips is not None and i >= max_clips:
+            break
+
+        response = requests.get(video["url"], stream=True)
+        local_file = f"{folder_path}/{video['keyword']}.mp4"
+
+        with open(local_file, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        clip = VideoFileClip(local_file).subclip(0, max_duration) if max_duration else VideoFileClip(local_file)
+        video_clips.append(clip)
+
+        if max_clips is not None and len(video_clips) >= max_clips:
+            break
+
+    return video_clips
+
+
+# Function to add captions to video clips
+def add_captions(video_clips, bullet_points):
+    captioned_clips = []
+    temp_folder = "temp_captions"
+
+    # Create temp_captions folder if it doesn't exist, otherwise delete its contents
+    if not os.path.exists(temp_folder):
+        os.makedirs(temp_folder)
+    else:
+        for file in os.listdir(temp_folder):
+            file_path = os.path.join(temp_folder, file)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+
+    for i, clip in enumerate(video_clips):
+        caption_file = f"{temp_folder}/{i}.txt"
+        with open(caption_file, "w") as f:
+            f.write(bullet_points[i])
+        captioned_file = f"{temp_folder}/{i}.png"
+        os.system(f"convert -background white -fill black -font Arial -size {clip.w}x30 caption:'$(cat {caption_file})' {captioned_file}")
+        caption = ImageClip(captioned_file).set_duration(clip.duration if clip.duration else 0).set_position(("center", "bottom"))
+        captioned_clip = CompositeVideoClip([clip, caption])
+        captioned_clips.append(captioned_clip)
+    return captioned_clips
+
+# Main function
+def main():
+    # Get video prompt from user
+    prompt = input("Enter a video prompt: ")
+
+    # Generate script using GPT-3
+    script = generate_script(prompt)
+
+    # Print the generated script
+    print("Generated script:")
+    print(script)
+
+    if script is not None:
+        # Extract keywords from the script
+        keywords = extract_keywords(script)
+
+        # Print the extracted keywords
+        print(f"Extracted keywords: {keywords}")
+
+        # Create temp_videos folder if it doesn't exist, otherwise delete its contents
+        if not os.path.exists("temp_videos"):
+            os.makedirs("temp_videos")
+        else:
+            for file in os.listdir("temp_videos"):
+                file_path = os.path.join("temp_videos", file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+
+        # Search for stock videos
+        videos = search_videos(keywords, max_clips=5)
+
+        # Change the download_videos function call to store videos in temp_videos
+        video_clips = download_videos(videos, "temp_videos", max_clips=5, max_duration=10)
+
+        # Add captions to video clips
+        captioned_clips = add_captions(video_clips, script.splitlines()[:5])
+
+        # Concatenate video clips and trim to be no more than 60 seconds
+        final_duration = min(sum([clip.duration for clip in captioned_clips]), 60)
+        final_video = concatenate_videoclips(captioned_clips, method="compose").subclip(0, final_duration)
+
+        # Save the final video
+        final_video.write_videofile("final_video.mp4", codec="libx264", audio_codec="aac", audio=False)
+
+        print("Video creation complete! Check the final_video.mp4 file.")
+    else:
+        print("Script generation failed. Please try again.")
+
+
+if __name__ == "__main__":
+    main()
+
+
+

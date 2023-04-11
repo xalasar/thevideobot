@@ -1,0 +1,113 @@
+import os
+import openai
+import requests
+import re
+import shutil
+
+# Set your API keys
+OPENAI_API_KEY = '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'
+PEXELS_API_KEY = 'ehyGJkwi8gUUjseQb1Hf5KpcugxylcoAp9L2eyR3gTRjtzxSL2e6KzPl'
+
+# Configure the OpenAI API client
+openai.api_key = OPENAI_API_KEY
+
+# Cache for video scripts
+video_script_cache = {}
+
+
+def get_stock_video(keyword):
+    pexels_url = "https://api.pexels.com/videos/search"
+    headers = {"Authorization": PEXELS_API_KEY}
+    params = {"query": keyword, "per_page": 1}
+
+    response = requests.get(pexels_url, headers=headers, params=params)
+    data = response.json()
+
+    if data and "videos" in data and data["videos"]:
+        video_url = data["videos"][0]["video_files"][0]["link"]
+        return video_url
+
+    return None
+
+
+def generate_video_script(prompt):
+    if prompt in video_script_cache:
+        return video_script_cache[prompt]
+
+    response = openai.Completion.create(
+        engine="text-davinci-002",
+        prompt=prompt,
+        max_tokens=750,
+        n=1,
+        stop=None,
+        temperature=0.1,
+    )
+
+    video_script = response.choices[0].text.strip()
+    video_script_cache[prompt] = video_script
+    return video_script
+
+
+def create_video(prompt):
+    modified_prompt = f"generate me a video transcript for {prompt}"
+    script = generate_video_script(modified_prompt)
+    print(f"Generated script:\n{script}")
+
+    # Split the script into individual sentences
+    scenes = re.split(r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s", script)
+
+    video = []
+
+    # Create a directory to store videos
+    video_folder = "generated_videos"
+    if not os.path.exists(video_folder):
+        os.makedirs(video_folder)
+
+    for idx, scene in enumerate(scenes):
+        scene_text = scene.strip()
+        scene_keywords = scene_text.split(" ")
+
+        for keyword in scene_keywords:
+            video_url = get_stock_video(keyword)
+            if video_url:
+                break
+
+        # Save the video to the created directory only if video_url is valid
+        if video_url:
+            video_name = f"scene_{idx + 1}.mp4"
+            save_path = os.path.join(video_folder, video_name)
+            download_video(video_url, save_path)
+
+            video.append({
+                "scene_text": scene_text,
+                "video_path": save_path,
+            })
+
+    return video
+
+
+def download_video(url, save_path):
+    response = requests.get(url, stream=True)
+
+    with open(save_path, "wb") as f:
+        response.raw.decode_content = True
+        shutil.copyfileobj(response.raw, f)
+
+
+def save_video_data_to_file(video_data, filename):
+    with open(filename, 'w', encoding='utf-8') as file:
+        for idx, scene in enumerate(video_data):
+            file.write(f"Scene {idx + 1}:\n")
+            file.write(scene['scene_text'] + "\n")
+            file.write(f"Video path: {scene['video_path']}\n")
+            file.write("\n" + "-" * 30 + "\n\n")
+
+
+project_prompt = input("Enter your video prompt: ")
+video_data = create_video(project_prompt)
+
+# Save the video data to a formatted text file
+output_filename = "generated_video_data.txt"
+save_video_data_to_file(video_data, output_filename)
+
+print(f"Video data saved to '{output_filename}'.")
